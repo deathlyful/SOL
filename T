@@ -35,57 +35,6 @@ function Wait-ForEnter {
     }
 }
 
-Clear-Host
-Write-ColoredLine ""
-Write-ColoredLine "=== SOL Recording Policy ===" Yellow
-Write-ColoredLine "Complete both steps with 100% success to pass." White
-Write-ColoredLine "If a prompt shows up, press OK to run the application." White
-Write-ColoredLine "Follow the instructions listed on each step." White
-Write-ColoredLine "This PowerShell policy currently has 2 steps." White
-Write-Host ""
-$cpu = Get-WmiObject Win32_Processor | Select-Object -First 1
-
-if ($cpu.NumberOfCores -ge 4 -and $cpu.MaxClockSpeed -ge 2500) {
-    Write-Host "Detected CPU: $($cpu.Name)" -ForegroundColor Green
-    Write-Host "Your CPU looks good." -ForegroundColor Green 
-} else {
-    Write-Host "Detected CPU: $($cpu.Name)" -ForegroundColor Red
-    Write-Host "Your CPU may be a bit weak. This process may take longer for you." -ForegroundColor Yellow
-}
-
-Write-Host ""
- 
-$gpu = Get-WmiObject Win32_VideoController | Select-Object -First 1
-$gpuName = $gpu.Name
-
-# Define "good" GPU keywords (can expand as needed)
-$goodGPUs = @("RTX 30", "RTX 40", "RX 6000", "RX 7000")
-
-$gpuIsGood = $false
-foreach ($keyword in $goodGPUs) {
-    if ($gpuName -like "*$keyword*") { $gpuIsGood = $true; break }
-}
-
-if ($gpuIsGood) {
-    Write-Host "Detected GPU: $gpuName" -ForegroundColor Green
-    Write-Host "Your GPU looks good." -ForegroundColor Green 
-} else {
-    Write-Host "Detected GPU: $gpuName" -ForegroundColor Red
-    Write-Host "Your GPU may be a bit weak. Some processes may be slower." -ForegroundColor Yellow
-}
-Write-ColoredLine "=== Credits ===" Yellow
-Write-ColoredLine "Made by SOL" White
-Write-Host ""
-Wait-ForEnter -Message "Press Enter to Continue"
-Clear-Host
-
-# ====== STEP 1: SYSTEM CHECK ====== 
-
-Write-ColoredLine "Step 1 of 2: SYSTEM Check" White
-Write-ColoredLine "INSTRUCTION: Reach 100% success" Yellow
-
-Write-Host ""
-
 function Show-LoadingBar {
     for ($i = 0; $i -le 10; $i++) {
         $percent = $i * 10
@@ -97,6 +46,69 @@ function Show-LoadingBar {
     Write-Host ""
 }
 
+function Write-Section {
+    param([string]$Title, [string[]]$Lines)
+    Write-Host "--- $Title ---" -ForegroundColor White
+    foreach ($line in $Lines) {
+        if ($line -match "^SUCCESS") { Write-Host $line -ForegroundColor Green }
+        elseif ($line -match "^FAILURE") { Write-Host $line -ForegroundColor Red }
+        elseif ($line -match "^WARNING") { Write-Host $line -ForegroundColor Yellow }
+        else { Write-Host $line -ForegroundColor White }
+    }
+}
+
+Clear-Host
+Write-ColoredLine ""
+Write-ColoredLine "=== SOL Recording Policy ===" Yellow
+Write-ColoredLine "Complete both steps with 100% success to pass." White
+Write-ColoredLine "If a prompt shows up, press OK to run the application." White
+Write-ColoredLine "Follow the instructions listed on each step." White
+Write-ColoredLine "This PowerShell policy currently has 2 steps." White
+Write-Host ""
+
+$cpu = Get-WmiObject Win32_Processor | Select-Object -First 1
+
+if ($cpu.NumberOfCores -ge 4 -and $cpu.MaxClockSpeed -ge 2500) {
+    Write-Host "Detected CPU: $($cpu.Name)" -ForegroundColor Green
+    Write-Host "Your CPU looks good." -ForegroundColor Green
+} else {
+    Write-Host "Detected CPU: $($cpu.Name)" -ForegroundColor Red
+    Write-Host "Your CPU may be a bit weak. This process may take longer for you." -ForegroundColor Yellow
+}
+
+Write-Host ""
+
+$gpu = Get-WmiObject Win32_VideoController | Select-Object -First 1
+$gpuName = $gpu.Name
+
+$goodGPUs = @("RTX 30", "RTX 40", "RX 6000", "RX 7000")
+
+$gpuIsGood = $false
+foreach ($keyword in $goodGPUs) {
+    if ($gpuName -like "*$keyword*") { $gpuIsGood = $true; break }
+}
+
+if ($gpuIsGood) {
+    Write-Host "Detected GPU: $gpuName" -ForegroundColor Green
+    Write-Host "Your GPU looks good." -ForegroundColor Green
+} else {
+    Write-Host "Detected GPU: $gpuName" -ForegroundColor Red
+    Write-Host "Your GPU may be a bit weak. Some processes may be slower." -ForegroundColor Yellow
+}
+
+Write-ColoredLine "=== Credits ===" Yellow
+Write-ColoredLine "Made by SOL" White
+Write-Host ""
+
+Wait-ForEnter -Message "Press Enter to Continue"
+Clear-Host
+
+# ====== STEP 1: SYSTEM CHECK ======
+
+Write-ColoredLine "Step 1 of 2: SYSTEM Check" White
+Write-ColoredLine "INSTRUCTION: Reach 100% success" Yellow
+Write-Host ""
+
 Show-LoadingBar
 
 $exclusionsOutput = @()
@@ -106,8 +118,9 @@ $windowsOutput = @()
 $memoryIntegrityOutput = @()
 $threatsOutput = @()
 $powershellSigOutput = @()
+$shortcutHotkeyOutput = @()
 
-# ======= FILES + MODULES (AUDIT ONLY – NO DELETIONS) ======= 
+# ======= FILES + MODULES (AUDIT ONLY – NO DELETIONS) =======
 
 $defaultModules = @(
     "Microsoft.PowerShell.Archive", "Microsoft.PowerShell.Diagnostics", "Microsoft.PowerShell.Host",
@@ -142,13 +155,11 @@ ForEach-Object {
         }
     }
 
-    # Non-default modules: REPORT (no delete)
     if (-not $isDefault -and -not $isProtected) {
         $modulesOutput += "FAILURE: Non-default module detected: $moduleName ($modulePath)"
         $foundIssues = $true
     }
     elseif ($isProtected) {
-        # Protected module: report and (optionally) hash-check the specific file
         if ($unauthorizedFiles.Count -eq 0) {
             $modulesOutput += "SUCCESS: Protected module '$moduleName' verified."
         } else {
@@ -177,7 +188,6 @@ ForEach-Object {
         }
     }
     else {
-        # Default modules: report unauthorized files (no delete)
         foreach ($file in $unauthorizedFiles) {
             $modulesOutput += "FAILURE: Unsigned/non-Microsoft file: '$($file.FullName)'"
             $foundIssues = $true
@@ -189,7 +199,6 @@ ForEach-Object {
     }
 }
 
-# Root files directly under Modules folder: REPORT (no delete)
 Get-ChildItem $modulesPath -Force -ErrorAction SilentlyContinue |
 Where-Object { -not $_.PSIsContainer } |
 ForEach-Object {
@@ -288,15 +297,61 @@ try {
     $powershellSigOutput += "WARNING: Could not verify PowerShell binary."
 }
 
-function Write-Section {
-    param([string]$Title, [string[]]$Lines)
-    Write-Host "--- $Title ---" -ForegroundColor White
-    foreach ($line in $Lines) {
-        if ($line -match "^SUCCESS") { Write-Host $line -ForegroundColor Green }
-        elseif ($line -match "^FAILURE") { Write-Host $line -ForegroundColor Red }
-        elseif ($line -match "^WARNING") { Write-Host $line -ForegroundColor Yellow }
-        else { Write-Host $line -ForegroundColor White }
+# ====== SHORTCUT HOTKEY AUDIT ======
+
+try {
+    $shortcutPaths = @(
+        "$env:USERPROFILE\Desktop",
+        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs",
+        "$env:ProgramData\Microsoft\Windows\Start Menu\Programs"
+    )
+
+    $wsh = New-Object -ComObject WScript.Shell
+    $foundHotkeys = $false
+
+    Get-ChildItem -Path $shortcutPaths -Filter *.lnk -Recurse -ErrorAction SilentlyContinue |
+    ForEach-Object {
+        $s = $wsh.CreateShortcut($_.FullName)
+
+        if ($s.Hotkey) {
+            $foundHotkeys = $true
+            $target = $s.TargetPath
+            $sigStatus = "N/A"
+            $isVerified = $false
+            $signer = $null
+
+            if ($target -and (Test-Path $target) -and ([System.IO.Path]::GetExtension($target) -ieq ".exe")) {
+                try {
+                    $sig = Get-AuthenticodeSignature -FilePath $target
+                    $sigStatus = $sig.Status
+                    $isVerified = ($sig.Status -eq 'Valid')
+                    if ($sig.SignerCertificate) {
+                        $signer = $sig.SignerCertificate.Subject
+                    }
+                } catch {
+                    $sigStatus = "Error"
+                }
+            } elseif (-not $target) {
+                $sigStatus = "NoTarget"
+            } elseif (-not (Test-Path $target)) {
+                $sigStatus = "MissingTarget"
+            } else {
+                $sigStatus = "NonExeTarget"
+            }
+
+            if ($isVerified) {
+                $shortcutHotkeyOutput += "SUCCESS: Hotkey shortcut '$($_.Name)' | Hotkey=$($s.Hotkey) | Verified=True | Status=$sigStatus | Target=$target"
+            } else {
+                $shortcutHotkeyOutput += "FAILURE: Hotkey shortcut '$($_.Name)' | Hotkey=$($s.Hotkey) | Verified=False | Status=$sigStatus | Target=$target"
+            }
+        }
     }
+
+    if (-not $foundHotkeys) {
+        $shortcutHotkeyOutput += "SUCCESS: No shortcut hotkeys found in monitored paths."
+    }
+} catch {
+    $shortcutHotkeyOutput += "WARNING: Could not audit shortcut hotkeys: $($_.Exception.Message)"
 }
 
 Write-Section "Files + Modules" $modulesOutput
@@ -306,8 +361,9 @@ Write-Section "Windows Defender" $defenderOutput
 Write-Section "Exclusions" $exclusionsOutput
 Write-Section "Threats" $threatsOutput
 Write-Section "Binary Sig" $powershellSigOutput
+Write-Section "Shortcut Hotkeys" $shortcutHotkeyOutput
 
-$allResults = $modulesOutput + $windowsOutput + $memoryIntegrityOutput + $defenderOutput + $exclusionsOutput + $threatsOutput + $powershellSigOutput
+$allResults = $modulesOutput + $windowsOutput + $memoryIntegrityOutput + $defenderOutput + $exclusionsOutput + $threatsOutput + $powershellSigOutput + $shortcutHotkeyOutput
 $total = ($allResults | Where-Object { $_ -match '^(SUCCESS|FAILURE|WARNING)' }).Count
 $success = ($allResults | Where-Object { $_ -match '^SUCCESS' }).Count
 $rate = if ($total -gt 0) { [math]::Round(($success / $total) * 100, 0) } else { 0 }
@@ -320,29 +376,6 @@ Wait-ForEnter -Message "Press Enter to Continue"
 Clear-Host
 
 # ====== STEP 2: PROCESS EXPLORER ======
-
-function Write-ColoredLine {
-    param (
-        [string]$Text,
-        [ConsoleColor]$Color = 'White'
-    )
-    $oldColor = $Host.UI.RawUI.ForegroundColor
-    $Host.UI.RawUI.ForegroundColor = $Color
-    Write-Host $Text
-    $Host.UI.RawUI.ForegroundColor = $oldColor
-}
-
-function Wait-ForEnter {
-    Start-Sleep -Seconds 1
-    Write-ColoredLine "Press Enter to exit." Yellow
-    while ($true) {
-        if ([System.Console]::KeyAvailable) {
-            $key = [System.Console]::ReadKey($true)
-            if ($key.Key -eq "Enter") { break }
-        }
-        Start-Sleep -Milliseconds 100
-    }
-}
 
 $IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
 ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
