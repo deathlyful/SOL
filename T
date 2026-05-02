@@ -9,6 +9,72 @@ if (-not $IsAdmin) {
     exit 1
 }
 
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class Mem {
+    [DllImport("kernel32.dll")] public static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll")] public static extern bool ReadProcessMemory(IntPtr hProc, IntPtr addr, byte[] buf, int size, out int read);
+    [DllImport("kernel32.dll")] public static extern IntPtr GetModuleHandle(string name);
+    [DllImport("kernel32.dll")] public static extern IntPtr GetProcAddress(IntPtr hMod, string proc);
+    [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr h);
+}
+'@
+
+function Get-PrologueBytes {
+    param([int]$TargetPid)
+    $funcAddr = [Mem]::GetProcAddress([Mem]::GetModuleHandle("ntdll.dll"), "NtQuerySystemInformation")
+    if ($funcAddr -eq [IntPtr]::Zero) { return @{ Ok = $false; Reason = "funcaddr" } }
+    $handle = [Mem]::OpenProcess(0x0010, $false, $TargetPid)
+    if ($handle -eq [IntPtr]::Zero) { return @{ Ok = $false; Reason = "openprocess" } }
+    $buf     = New-Object byte[] 8
+    $read    = 0
+    $success = [Mem]::ReadProcessMemory($handle, $funcAddr, $buf, 8, [ref]$read)
+    [Mem]::CloseHandle($handle) | Out-Null
+    if (-not $success -or $read -eq 0) { return @{ Ok = $false; Reason = "readmem" } }
+    return @{ Ok = $true; Bytes = $buf }
+}
+
+function Is-Hooked {
+    param([byte[]]$Bytes)
+    if ($Bytes[0] -eq 0xE9)                                                    { return $true }
+    if ($Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0x25)                           { return $true }
+    if ($Bytes[0] -eq 0xCC)                                                    { return $true }
+    if ($Bytes[0] -eq 0xEB)                                                    { return $true }
+    if ($Bytes[0] -eq 0x4C -and $Bytes[1] -eq 0x8B -and $Bytes[2] -eq 0xD1)  { return $false }
+    return $true
+}
+
+function Check-ProcessHook {
+    param(
+        [string]$Label,
+        [System.Diagnostics.Process]$Proc,
+        [hashtable]$SelfResult
+    )
+    $result = Get-PrologueBytes -TargetPid $Proc.Id
+    if (-not $result.Ok) { return $false }
+    $hooked   = Is-Hooked -Bytes $result.Bytes
+    $mismatch = $false
+    if ($SelfResult.Ok) {
+        for ($i = 0; $i -lt 8; $i++) {
+            if ($result.Bytes[$i] -ne $SelfResult.Bytes[$i]) { $mismatch = $true; break }
+        }
+    }
+    return (-not $hooked -and -not $mismatch)
+}
+
+function Find-ProcessExplorer {
+    $names = @("procexp64", "procexp", "procexp64a", "procexp_x64", "ProcessExplorer")
+    foreach ($n in $names) {
+        $p = Get-Process -Name $n -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($p) { return $p }
+    }
+    $all = Get-Process | Where-Object {
+        try { $_.MainWindowTitle -like "*Process Explorer*" } catch { $false }
+    } | Select-Object -First 1
+    return $all
+}
+
 function Write-ColoredLine {
     param (
         [string]$Text,
@@ -63,7 +129,7 @@ Write-ColoredLine "=== SOL Recording Policy ===" Yellow
 Write-ColoredLine "Complete both steps with 100% success to pass." White
 Write-ColoredLine "If a prompt shows up, press OK to run the application." White
 Write-ColoredLine "Follow the instructions listed on each step." White
-Write-ColoredLine "This PowerShell policy currently has 2 steps." White
+Write-ColoredLine "This PowerShell policy currently has 3 steps." White
 Write-Host ""
 
 $cpu = Get-WmiObject Win32_Processor | Select-Object -First 1
@@ -103,9 +169,7 @@ Write-Host ""
 Wait-ForEnter -Message "Press Enter to Continue"
 Clear-Host
 
-# ====== STEP 1: SYSTEM CHECK ======
-
-Write-ColoredLine "Step 1 of 2: SYSTEM Check" White
+Write-ColoredLine "Step 1 of 3: SYSTEM Check" White
 Write-ColoredLine "INSTRUCTION: Reach 100% success" Yellow
 Write-Host ""
 
@@ -119,8 +183,6 @@ $memoryIntegrityOutput = @()
 $threatsOutput = @()
 $powershellSigOutput = @()
 $shortcutHotkeyOutput = @()
-
-# ======= FILES + MODULES (AUDIT ONLY – NO DELETIONS) =======
 
 $defaultModules = @(
     "Microsoft.PowerShell.Archive", "Microsoft.PowerShell.Diagnostics", "Microsoft.PowerShell.Host",
@@ -297,8 +359,6 @@ try {
     $powershellSigOutput += "WARNING: Could not verify PowerShell binary."
 }
 
-# ====== SHORTCUT HOTKEY AUDIT ======
-
 try {
     $shortcutPaths = @(
         "$env:USERPROFILE\Desktop",
@@ -375,8 +435,6 @@ Write-Host ("Success Rate: $rate% ($success / $total)") -ForegroundColor $rateCo
 Wait-ForEnter -Message "Press Enter to Continue"
 Clear-Host
 
-# ====== STEP 2: PROCESS EXPLORER ======
-
 $IsAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()
 ).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 
@@ -395,8 +453,13 @@ if (-not $IsAdmin) {
 }
 
 Clear-Host
-Write-ColoredLine "Step 2 of 2: Process Explorer" White
-Write-ColoredLine "INSTRUCTION: Wait for Process Explorer to open. Scroll to the bottom, then close the window." Yellow
+Write-ColoredLine "Step 2 of 3: Process Explorer" White
+Write-Host ""
+Write-Host "==========================================================================" -ForegroundColor Red
+Write-Host "  INSTRUCTION: Wait for Process Explorer to open. Scroll down and back up." -ForegroundColor Red
+Write-Host "         Then return to the Powershell to continue the final step." -ForegroundColor Red
+Write-Host "                   *** DO NOT CLOSE PROCESS EXPLORER ***  " -ForegroundColor Yellow
+Write-Host "==========================================================================" -ForegroundColor Red
 Write-Host ""
 Show-LoadingBar
 
@@ -408,9 +471,9 @@ if ($runningPE) {
     $runningPE | ForEach-Object {
         try {
             $_ | Stop-Process -Force -ErrorAction Stop
-            Write-ColoredLine "[SUCCESS]  • Terminated process ID $($_.Id)." Green
+            Write-ColoredLine "[SUCCESS]  - Terminated process ID $($_.Id)." Green
         } catch {
-            Write-ColoredLine "[FAILED]  • Failed to terminate process ID $($_.Id): $($_.Exception.Message)" Red
+            Write-ColoredLine "[FAILED]  - Failed to terminate process ID $($_.Id): $($_.Exception.Message)" Red
         }
     }
     Start-Sleep -Seconds 2
@@ -509,11 +572,47 @@ if ($actualExe) {
     Write-ColoredLine "[SUCCESS] Process Explorer launched successfully." Green
     Write-Host ""
 
-    $process.WaitForExit()
     Write-ColoredLine "[SUCCESS] Success Rate: 100% (1 / 1)." Green
 } else {
     Write-ColoredLine "[FAILED] procexp64.exe was not found." Red
     Write-ColoredLine "[SUCCESS] Success Rate: 0% (0 / 1)." Red
+}
+
+Wait-ForEnter -Message "Press Enter to Continue"
+Clear-Host
+
+Clear-Host
+Write-ColoredLine "Step 3 of 3: Tamper Check" White
+Write-ColoredLine "INSTRUCTION: Press Enter to run the check." Yellow
+Write-Host ""
+Wait-ForEnter -Message "Press Enter to begin check"
+Write-Host ""
+Show-LoadingBar
+
+$selfPid    = [System.Diagnostics.Process]::GetCurrentProcess().Id
+$selfResult = Get-PrologueBytes -TargetPid $selfPid
+
+$step3Pass = $true
+
+$pe = Find-ProcessExplorer
+if (-not $pe) {
+    Write-Host "FAILURE: Process Explorer is not open. Open it and re-run this step." -ForegroundColor Red
+    $step3Pass = $false
+} else {
+    $peClean = Check-ProcessHook -Label "Process Explorer" -Proc $pe -SelfResult $selfResult
+    if ($peClean) {
+        Write-Host "SUCCESS: Process Explorer is clean." -ForegroundColor Green
+    } else {
+        Write-Host "FAILURE: Process Explorer has been tampered with." -ForegroundColor Red
+        $step3Pass = $false
+    }
+}
+
+Write-Host ""
+if ($step3Pass) {
+    Write-Host "Success Rate: 100% (1 / 1)" -ForegroundColor Green
+} else {
+    Write-Host "Success Rate: 0% (0 / 1)" -ForegroundColor Red
 }
 
 Wait-ForEnter
